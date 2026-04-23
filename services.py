@@ -301,6 +301,90 @@ def daily_order_for_date(day):
     return recs
 
 
+def supplier_order_from_sales(day):
+    """Given a specific sales date, returns the supplier purchase order needed
+    to cover that day's consumption.
+
+    Steps:
+      1. Aggregate consumption_log rows for the day -> kitchen-unit usage per ingredient
+      2. Add waste buffer: needed_procure = usage / (1 - waste_pct/100)
+      3. Convert to supplier packs: packs = ceil(needed_procure / pack_size)
+      4. Actual purchased qty = packs * pack_size (always >= needed_procure)
+      5. Cost = packs * pack_cost
+
+    Output groups by supplier for easy ordering.
+    """
+    import math
+    with get_conn() as conn:
+        sales_rows = conn.execute(
+            """SELECT p.name AS product, o.service_mode,
+                      SUM(o.quantity) AS qty, SUM(o.total_revenue) AS revenue
+               FROM orders o JOIN products p ON p.id=o.product_id
+               WHERE DATE(o.created_at) = DATE(?)
+               GROUP BY p.name, o.service_mode""",
+            (str(day),),
+        ).fetchall()
+
+        consumption = conn.execute(
+            """SELECT c.ingredient_id, SUM(c.quantity) AS used
+               FROM consumption_log c
+               WHERE DATE(c.created_at) = DATE(?)
+               GROUP BY c.ingredient_id""",
+            (str(day),),
+        ).fetchall()
+        used_by_ing = {r["ingredient_id"]: r["used"] for r in consumption}
+
+        ingredients = {r["id"]: dict(r) for r in conn.execute(
+            "SELECT * FROM ingredients").fetchall()}
+
+    parents = parent_products_map()
+    items = []
+    for iid, used_kitchen in used_by_ing.items():
+        ing = ingredients[iid]
+        waste = (ing["waste_pct"] or 0) / 100.0
+        need_with_waste = used_kitchen / (1 - waste) if waste < 1 else used_kitchen
+        pack_size = ing["pack_size"] or 1
+        pack_cost = ing["pack_cost"] or 0
+        packs = math.ceil(need_with_waste / pack_size) if pack_size > 0 else 0
+        actual_qty = packs * pack_size
+        total_cost = packs * pack_cost
+        items.append({
+            "ingredient_id": iid,
+            "name": ing["name"],
+            "category": ing["category"],
+            "kitchen_unit": ing["unit"],
+            "parent_products": ", ".join(parents.get(iid, [])) or "-",
+            "sales_consumption": round(used_kitchen, 2),
+            "waste_pct": ing["waste_pct"],
+            "need_with_waste": round(need_with_waste, 2),
+            "supplier_name": ing["supplier_name"] or "-",
+            "pack_label": ing["supplier_pack_label"] or "-",
+            "pack_size": pack_size,
+            "pack_cost": pack_cost,
+            "packs_to_order": packs,
+            "actual_qty": round(actual_qty, 2),
+            "surplus": round(actual_qty - need_with_waste, 2),
+            "total_cost": round(total_cost, 2),
+        })
+
+    # group by supplier for easy ordering
+    by_supplier = {}
+    for it in items:
+        by_supplier.setdefault(it["supplier_name"], []).append(it)
+    for sup in by_supplier:
+        by_supplier[sup].sort(key=lambda x: -x["total_cost"])
+
+    return {
+        "date": str(day),
+        "sales": [dict(r) for r in sales_rows],
+        "sales_total_units": sum(r["qty"] for r in sales_rows),
+        "sales_total_revenue": sum(r["revenue"] for r in sales_rows),
+        "items": sorted(items, key=lambda x: -x["total_cost"]),
+        "by_supplier": by_supplier,
+        "total_cost": round(sum(it["total_cost"] for it in items), 2),
+    }
+
+
 def weekly_order_plan(base_date=None):
     """Returns a 7-day plan: day -> list of ingredient IDs scheduled for that day."""
     from datetime import date as _d, timedelta

@@ -17,6 +17,7 @@ from services import (
     save_daily_order,
     receive_daily_order,
     list_daily_orders,
+    supplier_order_from_sales,
 )
 
 app = Flask(__name__)
@@ -157,6 +158,18 @@ def daily_order_receive(order_id):
     else:
         flash("לא ניתן לעדכן - ההזמנה כבר קיבלה סטטוס אחר", "error")
     return redirect(url_for("daily_order"))
+
+
+@app.route("/supplier-order")
+def supplier_order_view():
+    day_str = request.args.get("date") or date.today().isoformat()
+    try:
+        d = datetime.strptime(day_str, "%Y-%m-%d").date()
+    except ValueError:
+        d = date.today()
+    result = supplier_order_from_sales(d)
+    return render_template("supplier_order.html", day=d, day_iso=d.isoformat(),
+                           result=result)
 
 
 @app.route("/settings", methods=["GET", "POST"])

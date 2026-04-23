@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>הזמנה לספקים לפי מכירות - {{ day.strftime('%A, %d/%m/%Y') }}</h1>
+
+<form method="get" class="inline-form">
+  <label>תאריך מכירות
+    <input type="date" name="date" value="{{ day_iso }}" onchange="this.form.submit()">
+  </label>
+</form>
+
+{% if result.sales %}
+<section>
+  <h2>מכירות באותו יום</h2>
+  <table>
+    <thead><tr><th>מוצר</th><th>מצב</th><th>כמות</th><th>הכנסה</th></tr></thead>
+    <tbody>
+      {% for s in result.sales %}
+      <tr>
+        <td>{{ s.product }}</td>
+        <td><span class="badge {{ s.service_mode|lower }}">{{ s.service_mode }}</span></td>
+        <td>{{ s.qty }}</td>
+        <td>₪{{ "%.2f"|format(s.revenue) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="2">סה"כ</th>
+        <th>{{ result.sales_total_units }}</th>
+        <th>₪{{ "%.2f"|format(result.sales_total_revenue) }}</th>
+      </tr>
+    </tfoot>
+  </table>
+</section>
+
+<section>
+  <h2>הזמנה מסוכמת לפי ספק</h2>
+  <p class="muted">
+    כל ספק וכמה מכל פריט צריך להזמין ממנו, ביחידות של הספק (אחרי עיגול למעלה לחבילה שלמה + תוספת פחת).
+  </p>
+  {% for supplier, items in result.by_supplier.items() %}
+  <h3>{{ supplier }}</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>פריט</th><th>אריזה</th>
+        <th>צריכה במטבח</th><th>פחת %</th><th>נדרש (+ פחת)</th>
+        <th>מס' אריזות</th><th>כמות בפועל</th>
+        <th>עודף</th><th>מחיר/אריזה</th><th>סה"כ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td>{{ it.name }}</td>
+        <td>{{ it.pack_label }}</td>
+        <td>{{ "%.1f"|format(it.sales_consumption) }} {{ it.kitchen_unit }}</td>
+        <td>{{ "%.1f"|format(it.waste_pct) }}%</td>
+        <td>{{ "%.1f"|format(it.need_with_waste) }} {{ it.kitchen_unit }}</td>
+        <td><b>{{ it.packs_to_order }}</b></td>
+        <td>{{ "%.0f"|format(it.actual_qty) }} {{ it.kitchen_unit }}</td>
+        <td>{{ "%.0f"|format(it.surplus) }}</td>
+        <td>₪{{ "%.2f"|format(it.pack_cost) }}</td>
+        <td>₪{{ "%.2f"|format(it.total_cost) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><th colspan="9">סה"כ לספק</th>
+          <th>₪{{ "%.2f"|format(items|sum(attribute='total_cost')) }}</th></tr>
+    </tfoot>
+  </table>
+  {% endfor %}
+</section>
+
+<section class="totals-box">
+  <h2>סה"כ כללי להזמנה</h2>
+  <p><b>מכירות היום:</b> {{ result.sales_total_units }} מנות · הכנסה ₪{{ "%.2f"|format(result.sales_total_revenue) }}</p>
+  <p><b>עלות הזמנה לספקים:</b> ₪{{ "%.2f"|format(result.total_cost) }}</p>
+  {% if result.sales_total_revenue > 0 %}
+  <p><b>אחוז עלות מהכנסה:</b>
+     {{ "%.1f"|format(result.total_cost / result.sales_total_revenue * 100) }}%</p>
+  {% endif %}
+</section>
+
+{% else %}
+  <p class="muted">אין נתוני מכירות בתאריך {{ day_iso }}. בחר תאריך אחר או הזן הזמנות דרך /order.</p>
+{% endif %}
+{% endblock %}

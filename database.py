@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS ingredients (
     tender_lead_time_days INTEGER NOT NULL DEFAULT 14,
     waste_pct REAL NOT NULL DEFAULT 0,   -- expected % loss (spoilage/handling/trim)
     target_cover_days INTEGER NOT NULL DEFAULT 3,  -- desired days of stock on hand
-    order_schedule TEXT NOT NULL DEFAULT 'sun,tue,thu'  -- CSV of weekdays to order
+    order_schedule TEXT NOT NULL DEFAULT 'sun,tue,thu',  -- CSV of weekdays to order
+    supplier_name TEXT,                  -- who supplies this ingredient
+    supplier_pack_label TEXT,            -- e.g. 'ארגז 5 ק"ג', 'גלון 18 ליטר', 'חבילה 50 יחידות'
+    pack_size REAL DEFAULT 1,            -- kitchen-units per one supplier pack
+    pack_cost REAL DEFAULT 0             -- price the supplier charges per pack
 );
 
 CREATE TABLE IF NOT EXISTS products (

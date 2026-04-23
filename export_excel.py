@@ -29,6 +29,7 @@ from database import get_conn
 from services import (
     product_tree, inventory_status, tender_candidates,
     parent_products_map, daily_order_for_date, weekly_order_plan,
+    supplier_order_from_sales,
 )
 
 
@@ -500,6 +501,68 @@ def sheet_weekly_plan(wb):
     _autosize(ws, max_width=80)
 
 
+def sheet_supplier_order(wb, sample_date=None):
+    """For a given date's sales, show the supplier purchase order grouped by supplier.
+
+    sample_date defaults to the most recent day with sales data.
+    """
+    ws = wb.create_sheet("הזמנה לספק (לפי מכירות)")
+    ws.sheet_view.rightToLeft = True
+
+    if sample_date is None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT DATE(MAX(created_at)) AS d FROM orders"
+            ).fetchone()
+        sample_date = row["d"] if row and row["d"] else date.today().isoformat()
+
+    from datetime import datetime as _dt
+    d = _dt.strptime(sample_date, "%Y-%m-%d").date() if isinstance(sample_date, str) \
+        else sample_date
+    result = supplier_order_from_sales(d)
+
+    ws["A1"] = f"הזמנה לספקים לפי מכירות יום {d.isoformat()}"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = (f"מכירות: {result['sales_total_units']} מנות · "
+                f"הכנסה ₪{result['sales_total_revenue']:.2f} · "
+                f"עלות הזמנה לספקים: ₪{result['total_cost']:.2f}")
+    ws["A2"].font = Font(size=11)
+
+    ws.append([])
+    hdr = ["ספק", "פריט", "אריזה", "צריכה במטבח", "יחידת מטבח",
+           "פחת %", "נדרש (כולל פחת)", "כמות בחבילה",
+           "מס' חבילות להזמין", "כמות בפועל שמגיעה",
+           "עודף (מעבר לנדרש)", "מחיר חבילה", "סה\"כ לפריט"]
+    ws.append(hdr)
+    _style_header(ws, 4, len(hdr))
+
+    for supplier, items in result["by_supplier"].items():
+        sup_total = sum(it["total_cost"] for it in items)
+        for it in items:
+            ws.append([
+                supplier, it["name"], it["pack_label"],
+                it["sales_consumption"], it["kitchen_unit"],
+                it["waste_pct"], it["need_with_waste"],
+                it["pack_size"], it["packs_to_order"],
+                it["actual_qty"], it["surplus"],
+                it["pack_cost"], it["total_cost"],
+            ])
+        # subtotal row per supplier
+        row_idx = ws.max_row + 1
+        ws.cell(row=row_idx, column=1, value=f"סה\"כ {supplier}").font = TOTAL_FONT
+        ws.cell(row=row_idx, column=13, value=round(sup_total, 2)).font = TOTAL_FONT
+        for c in range(1, len(hdr) + 1):
+            ws.cell(row=row_idx, column=c).fill = TOTAL_FILL
+
+    # grand total
+    row_idx = ws.max_row + 2
+    ws.cell(row=row_idx, column=1, value="סה\"כ כללי").font = Font(bold=True, size=12)
+    ws.cell(row=row_idx, column=13, value=result["total_cost"]).font = Font(bold=True, size=12)
+
+    ws.freeze_panes = "A5"
+    _autosize(ws, max_width=40)
+
+
 def sheet_daily_order(wb):
     """Today's recommended purchase order (detailed)."""
     ws = wb.create_sheet("הזמנה יומית")
@@ -556,6 +619,7 @@ def build():
     sheet_inventory(wb)
     sheet_weekly_plan(wb)
     sheet_daily_order(wb)
+    sheet_supplier_order(wb)
 
     wb.save(OUT_PATH)
     return OUT_PATH
@@ -570,5 +634,6 @@ if __name__ == "__main__":
         "סקירה", "מוצרים", "רכיבים", "עצי מוצר", "מכירות חודשיות",
         "שימוש רכיבים חודשי", "הזמנות", "פרמטרי הזמנה אוטומטית",
         "מלאי ומכרזים", "תכנית שבועית", "הזמנה יומית",
+        "הזמנה לספק (לפי מכירות)",
     ]:
         print(f"  · {name}")
