@@ -501,12 +501,15 @@ def sheet_weekly_plan(wb):
     _autosize(ws, max_width=80)
 
 
-def sheet_supplier_order(wb, sample_date=None):
+def sheet_supplier_order(wb, sample_date=None, product_id=None, sheet_name=None):
     """For a given date's sales, show the supplier purchase order grouped by supplier.
 
     sample_date defaults to the most recent day with sales data.
+    If product_id is given, filter to a single product's consumption only.
     """
-    ws = wb.create_sheet("הזמנה לספק (לפי מכירות)")
+    if sheet_name is None:
+        sheet_name = "הזמנה לספק (לפי מכירות)"
+    ws = wb.create_sheet(sheet_name)
     ws.sheet_view.rightToLeft = True
 
     if sample_date is None:
@@ -519,9 +522,12 @@ def sheet_supplier_order(wb, sample_date=None):
     from datetime import datetime as _dt
     d = _dt.strptime(sample_date, "%Y-%m-%d").date() if isinstance(sample_date, str) \
         else sample_date
-    result = supplier_order_from_sales(d)
+    result = supplier_order_from_sales(d, product_id=product_id)
 
-    ws["A1"] = f"הזמנה לספקים לפי מכירות יום {d.isoformat()}"
+    title = f"הזמנה לספקים לפי מכירות יום {d.isoformat()}"
+    if result.get("product"):
+        title += f" - {result['product']['name']} בלבד"
+    ws["A1"] = title
     ws["A1"].font = Font(bold=True, size=14)
     ws["A2"] = (f"מכירות: {result['sales_total_units']} מנות · "
                 f"הכנסה ₪{result['sales_total_revenue']:.2f} · "
@@ -621,6 +627,15 @@ def build():
     sheet_daily_order(wb)
     sheet_supplier_order(wb)
 
+    # burger-only sheet (product_id=1 is the hamburger in our seed)
+    with get_conn() as conn:
+        burger = conn.execute(
+            "SELECT id FROM products WHERE name='המבורגר'"
+        ).fetchone()
+    if burger:
+        sheet_supplier_order(wb, product_id=burger["id"],
+                             sheet_name="הזמנה לספק - המבורגר בלבד")
+
     wb.save(OUT_PATH)
     return OUT_PATH
 
@@ -634,6 +649,6 @@ if __name__ == "__main__":
         "סקירה", "מוצרים", "רכיבים", "עצי מוצר", "מכירות חודשיות",
         "שימוש רכיבים חודשי", "הזמנות", "פרמטרי הזמנה אוטומטית",
         "מלאי ומכרזים", "תכנית שבועית", "הזמנה יומית",
-        "הזמנה לספק (לפי מכירות)",
+        "הזמנה לספק (לפי מכירות)", "הזמנה לספק - המבורגר בלבד",
     ]:
         print(f"  · {name}")

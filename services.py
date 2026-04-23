@@ -301,9 +301,12 @@ def daily_order_for_date(day):
     return recs
 
 
-def supplier_order_from_sales(day):
+def supplier_order_from_sales(day, product_id=None):
     """Given a specific sales date, returns the supplier purchase order needed
     to cover that day's consumption.
+
+    Optional `product_id` limits the calculation to a single product's sales
+    (e.g. only the hamburger). Other product sales are ignored.
 
     Steps:
       1. Aggregate consumption_log rows for the day -> kitchen-unit usage per ingredient
@@ -315,27 +318,43 @@ def supplier_order_from_sales(day):
     Output groups by supplier for easy ordering.
     """
     import math
+    product_filter_sql = "AND o.product_id = ?" if product_id else ""
+    params_sales = [str(day)]
+    params_cons = [str(day)]
+    if product_id:
+        params_sales.append(product_id)
+        params_cons.append(product_id)
+
     with get_conn() as conn:
         sales_rows = conn.execute(
-            """SELECT p.name AS product, o.service_mode,
+            f"""SELECT p.name AS product, o.service_mode,
                       SUM(o.quantity) AS qty, SUM(o.total_revenue) AS revenue
                FROM orders o JOIN products p ON p.id=o.product_id
-               WHERE DATE(o.created_at) = DATE(?)
+               WHERE DATE(o.created_at) = DATE(?) {product_filter_sql}
                GROUP BY p.name, o.service_mode""",
-            (str(day),),
+            params_sales,
         ).fetchall()
 
+        # consumption_log is joined via order_id -> product_id for the filter
+        cons_filter = "AND o.product_id = ?" if product_id else ""
         consumption = conn.execute(
-            """SELECT c.ingredient_id, SUM(c.quantity) AS used
-               FROM consumption_log c
-               WHERE DATE(c.created_at) = DATE(?)
+            f"""SELECT c.ingredient_id, SUM(c.quantity) AS used
+               FROM consumption_log c JOIN orders o ON o.id=c.order_id
+               WHERE DATE(c.created_at) = DATE(?) {cons_filter}
                GROUP BY c.ingredient_id""",
-            (str(day),),
+            params_cons,
         ).fetchall()
         used_by_ing = {r["ingredient_id"]: r["used"] for r in consumption}
 
         ingredients = {r["id"]: dict(r) for r in conn.execute(
             "SELECT * FROM ingredients").fetchall()}
+
+        product_meta = None
+        if product_id:
+            row = conn.execute(
+                "SELECT * FROM products WHERE id=?", (product_id,)
+            ).fetchone()
+            product_meta = dict(row) if row else None
 
     parents = parent_products_map()
     items = []
@@ -376,6 +395,8 @@ def supplier_order_from_sales(day):
 
     return {
         "date": str(day),
+        "product_id": product_id,
+        "product": product_meta,
         "sales": [dict(r) for r in sales_rows],
         "sales_total_units": sum(r["qty"] for r in sales_rows),
         "sales_total_revenue": sum(r["revenue"] for r in sales_rows),

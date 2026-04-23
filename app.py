@@ -167,9 +167,16 @@ def supplier_order_view():
         d = datetime.strptime(day_str, "%Y-%m-%d").date()
     except ValueError:
         d = date.today()
-    result = supplier_order_from_sales(d)
+
+    product_id = request.args.get("product_id")
+    product_id = int(product_id) if product_id and product_id != "all" else None
+
+    result = supplier_order_from_sales(d, product_id=product_id)
+    with get_conn() as conn:
+        products = conn.execute("SELECT * FROM products ORDER BY name").fetchall()
     return render_template("supplier_order.html", day=d, day_iso=d.isoformat(),
-                           result=result)
+                           result=result, products=products,
+                           selected_product=product_id)
 
 
 @app.route("/settings", methods=["GET", "POST"])

@@ -1,10 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>הזמנה לספקים לפי מכירות - {{ day.strftime('%A, %d/%m/%Y') }}</h1>
+<h1>הזמנה לספקים לפי מכירות
+  {% if result.product %} · <span style="color:#2563eb">{{ result.product.name }} בלבד</span>{% endif %}
+</h1>
+<p class="muted">{{ day.strftime('%A, %d/%m/%Y') }}</p>
 
-<form method="get" class="inline-form">
+<form method="get" class="inline-form" style="display:flex; gap:1rem; flex-wrap:wrap;">
   <label>תאריך מכירות
     <input type="date" name="date" value="{{ day_iso }}" onchange="this.form.submit()">
+  </label>
+  <label>מוצר
+    <select name="product_id" onchange="this.form.submit()">
+      <option value="all">כל המוצרים</option>
+      {% for p in products %}
+      <option value="{{ p.id }}" {% if selected_product == p.id %}selected{% endif %}>
+        {{ p.name }}
+      </option>
+      {% endfor %}
+    </select>
   </label>
 </form>
 
