@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>מכרזים מומלצים</h1>
+
+{% if rows %}
+<p>אלו פריטים שהמלאי שלהם עומד להסתיים בתוך חלון המכרז. כמות מומלצת מחושבת לפי צריכה של 60 ימים קדימה (או פי-2 מסף ההזמנה, הגדול מביניהם).</p>
+<table>
+  <thead>
+    <tr>
+      <th>רכיב</th><th>קטגוריה</th><th>מלאי</th><th>שימוש יומי</th>
+      <th>ימים שנשארו</th><th>זמן אספקה (ימים)</th>
+      <th>כמות מומלצת</th><th>יחידה</th><th>עלות מוערכת</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.name }}</td>
+      <td>{{ r.category }}</td>
+      <td>{{ "%.1f"|format(r.stock) }}</td>
+      <td>{{ "%.2f"|format(r.rate_per_day) }}</td>
+      <td>{% if r.days_left is not none %}{{ "%.0f"|format(r.days_left) }}{% else %}—{% endif %}</td>
+      <td>{{ r.tender_lead_time_days }}</td>
+      <td>{{ "%.1f"|format(r.suggested_purchase) }}</td>
+      <td>{{ r.unit }}</td>
+      <td>₪{{ "%.2f"|format(r.estimated_cost) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="8">סה"כ עלות מוערכת למכרזים</th><th>₪{{ "%.2f"|format(total) }}</th></tr>
+  </tfoot>
+</table>
+{% else %}
+  <p class="muted">אין כרגע פריטים שזקוקים למכרז. המלאי תקין ביחס לצריכה.</p>
+{% endif %}
+{% endblock %}

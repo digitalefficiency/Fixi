@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>הזמנה חדשה</h1>
+
+<form method="post" class="order-form" id="orderForm">
+  <label>מוצר
+    <select name="product_id" id="product_id" required>
+      {% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+  </label>
+
+  <fieldset>
+    <legend>סוג שירות</legend>
+    <label><input type="radio" name="service_mode" value="SIT" checked> ישיבה במקום</label>
+    <label><input type="radio" name="service_mode" value="TA"> Take Away</label>
+  </fieldset>
+
+  <label>כמות
+    <input type="number" name="quantity" id="quantity" min="1" value="1" required>
+  </label>
+
+  <button type="submit">שמור הזמנה</button>
+</form>
+
+<section id="preview">
+  <h2>תצוגה מקדימה של עץ המוצר</h2>
+  <div id="previewBody" class="muted">בחר מוצר וסוג שירות כדי לראות את עץ המוצר ואת העלות.</div>
+</section>
+
+<script>
+async function refreshPreview() {
+  const pid = document.getElementById('product_id').value;
+  const mode = document.querySelector('input[name=service_mode]:checked').value;
+  const qty = document.getElementById('quantity').value || 1;
+  const r = await fetch(`/api/preview?product_id=${pid}&service_mode=${mode}&quantity=${qty}`);
+  const data = await r.json();
+  const rows = data.tree.map(it =>
+    `<tr><td>${it.name}</td><td>${it.quantity.toFixed(2)} ${it.unit}</td>
+     <td><span class="source ${it.source}">${it.source}</span></td>
+     <td>₪${it.cost.toFixed(2)}</td></tr>`).join('');
+  document.getElementById('previewBody').innerHTML = `
+    <table><thead><tr><th>רכיב</th><th>כמות</th><th>מקור</th><th>עלות</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="summary">
+      <div>עלות ליחידה: <b>₪${data.unit_cost.toFixed(2)}</b></div>
+      <div>מחיר ליחידה: <b>₪${data.unit_price.toFixed(2)}</b></div>
+      <div>רווח ליחידה: <b>₪${data.unit_margin.toFixed(2)}</b></div>
+      <div>סך עלות: <b>₪${data.total_cost.toFixed(2)}</b></div>
+      <div>סך הכנסה: <b>₪${data.total_revenue.toFixed(2)}</b></div>
+    </div>`;
+}
+document.getElementById('orderForm').addEventListener('change', refreshPreview);
+document.getElementById('orderForm').addEventListener('input', refreshPreview);
+refreshPreview();
+</script>
+{% endblock %}

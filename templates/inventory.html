@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>מלאי</h1>
+<p class="muted">שימוש יומי מחושב על בסיס צריכה של 30 ימים אחרונים.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>רכיב</th><th>קטגוריה</th><th>יחידה</th><th>מחיר/יח'</th>
+      <th>מלאי</th><th>סף הזמנה</th><th>צריכה (30 ימים)</th>
+      <th>שימוש יומי</th><th>ימים שנשארו</th><th>סטטוס</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="{% if r.needs_tender %}warn{% endif %}">
+      <td>{{ r.name }}</td>
+      <td>{{ r.category }}</td>
+      <td>{{ r.unit }}</td>
+      <td>₪{{ "%.3f"|format(r.cost_per_unit) }}</td>
+      <td>{{ "%.1f"|format(r.stock) }}</td>
+      <td>{{ "%.1f"|format(r.reorder_threshold) }}</td>
+      <td>{{ "%.1f"|format(r.used_30d) }}</td>
+      <td>{{ "%.2f"|format(r.rate_per_day) }}</td>
+      <td>{% if r.days_left is not none %}{{ "%.0f"|format(r.days_left) }}{% else %}—{% endif %}</td>
+      <td>{% if r.needs_tender %}<span class="badge warn">דרוש מכרז</span>{% else %}תקין{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

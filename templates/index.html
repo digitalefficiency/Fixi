@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>לוח בקרה</h1>
+
+<section class="kpis">
+  <div class="kpi"><div class="label">הזמנות (30 ימים)</div><div class="value">{{ kpi.cnt }}</div></div>
+  <div class="kpi"><div class="label">הכנסה (30 ימים)</div><div class="value">₪{{ "%.2f"|format(kpi.rev) }}</div></div>
+  <div class="kpi"><div class="label">עלות חומר (30 ימים)</div><div class="value">₪{{ "%.2f"|format(kpi.cost) }}</div></div>
+  <div class="kpi {% if tender_count %}warn{% endif %}">
+    <div class="label">פריטים במכרז</div>
+    <div class="value">{{ tender_count }}</div>
+  </div>
+</section>
+
+<section>
+  <h2>מוצרים</h2>
+  <div class="cards">
+    {% for p in products %}
+      <a class="card" href="{{ url_for('product_detail', product_id=p.id) }}">
+        <h3>{{ p.name }}</h3>
+        <p>במקום: ₪{{ "%.0f"|format(p.price_sit) }} · TA: ₪{{ "%.0f"|format(p.price_ta) }}</p>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>הזמנות אחרונות</h2>
+  {% if recent %}
+  <table>
+    <thead><tr><th>מוצר</th><th>סוג</th><th>כמות</th><th>עלות</th><th>הכנסה</th><th>זמן</th></tr></thead>
+    <tbody>
+      {% for o in recent %}
+      <tr>
+        <td>{{ o.product_name }}</td>
+        <td><span class="badge {{ o.service_mode|lower }}">{{ o.service_mode }}</span></td>
+        <td>{{ o.quantity }}</td>
+        <td>₪{{ "%.2f"|format(o.total_cost) }}</td>
+        <td>₪{{ "%.2f"|format(o.total_revenue) }}</td>
+        <td>{{ o.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">אין עדיין הזמנות - <a href="{{ url_for('order') }}">הזן הזמנה ראשונה</a></p>
+  {% endif %}
+</section>
+{% endblock %}
