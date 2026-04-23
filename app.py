@@ -3,6 +3,7 @@ Flask app: dashboard, product trees, order entry, inventory, tenders.
 """
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 
+from datetime import date, datetime
 from database import get_conn, init_db, DB_PATH
 from services import (
     product_tree,
@@ -10,6 +11,12 @@ from services import (
     record_order,
     inventory_status,
     tender_candidates,
+    parent_products_map,
+    daily_order_for_date,
+    weekly_order_plan,
+    save_daily_order,
+    receive_daily_order,
+    list_daily_orders,
 )
 
 app = Flask(__name__)
@@ -107,7 +114,80 @@ def api_preview():
 @app.route("/inventory")
 def inventory():
     rows = inventory_status()
+    parents = parent_products_map()
+    for r in rows:
+        r["parent_products"] = ", ".join(parents.get(r["id"], [])) or "-"
     return render_template("inventory.html", rows=rows)
+
+
+@app.route("/daily-order", methods=["GET", "POST"])
+def daily_order():
+    day_str = request.args.get("date") or request.form.get("date") or date.today().isoformat()
+    try:
+        d = datetime.strptime(day_str, "%Y-%m-%d").date()
+    except ValueError:
+        d = date.today()
+
+    if request.method == "POST" and request.form.get("action") == "save":
+        recs = daily_order_for_date(d)
+        if recs:
+            oid = save_daily_order(d.isoformat(), recs,
+                                   notes=request.form.get("notes") or None)
+            flash(f"נוצרה הזמנה יומית #{oid} - {len(recs)} פריטים", "success")
+        else:
+            flash("אין פריטים להזמין היום", "error")
+        return redirect(url_for("daily_order", date=day_str))
+
+    recs = daily_order_for_date(d)
+    parents = parent_products_map()
+    for r in recs:
+        r["parent_products"] = ", ".join(parents.get(r["id"], [])) or "-"
+    plan = weekly_order_plan(d)
+    total = sum(r["estimated_cost"] for r in recs)
+    return render_template("daily_order.html",
+                           day=d, day_iso=d.isoformat(), recs=recs,
+                           total=total, plan=plan,
+                           history=list_daily_orders())
+
+
+@app.route("/daily-order/<int:order_id>/receive", methods=["POST"])
+def daily_order_receive(order_id):
+    if receive_daily_order(order_id):
+        flash(f"הזמנה #{order_id} סומנה כ'התקבלה' והמלאי עודכן", "success")
+    else:
+        flash("לא ניתן לעדכן - ההזמנה כבר קיבלה סטטוס אחר", "error")
+    return redirect(url_for("daily_order"))
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    if request.method == "POST":
+        with get_conn() as conn:
+            for key, value in request.form.items():
+                if not key.startswith("ing_"):
+                    continue
+                _, iid, field = key.split("_", 2)
+                iid = int(iid)
+                if field == "cover":
+                    conn.execute(
+                        "UPDATE ingredients SET target_cover_days=? WHERE id=?",
+                        (int(value or 0), iid))
+                elif field == "schedule":
+                    conn.execute(
+                        "UPDATE ingredients SET order_schedule=? WHERE id=?",
+                        (value.strip() or "sun", iid))
+                elif field == "waste":
+                    conn.execute(
+                        "UPDATE ingredients SET waste_pct=? WHERE id=?",
+                        (float(value or 0), iid))
+        flash("הגדרות נשמרו", "success")
+        return redirect(url_for("settings"))
+
+    with get_conn() as conn:
+        ingredients = conn.execute(
+            "SELECT * FROM ingredients ORDER BY category, name"
+        ).fetchall()
+    return render_template("settings.html", ingredients=ingredients)
 
 
 @app.route("/tenders")

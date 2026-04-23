@@ -282,8 +282,38 @@ def export_json(summary, trees, prices, path="simulation_output.json"):
     return path
 
 
+def normalize_end_stock():
+    """Sets each ingredient's ending stock to a realistic 'mid-cycle' level:
+    enough for ~1.5x target_cover_days of consumption. This gives the
+    daily-order view something to actually recommend today.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT i.*, COALESCE((SELECT SUM(c.quantity) FROM consumption_log c
+                                     WHERE c.ingredient_id=i.id
+                                       AND c.created_at >= datetime('now','-30 days')
+                                    ), 0) AS used_30d
+               FROM ingredients i"""
+        ).fetchall()
+        for r in rows:
+            rate_per_day = (r["used_30d"] or 0) / 30.0
+            cover = r["target_cover_days"] or 3
+            lead = r["tender_lead_time_days"]
+            # hold ~85% of (lead+cover) so we're mid-cycle but NOT under lead_time
+            # (which would trigger tender). This gives realistic daily-order demo.
+            target = rate_per_day * (lead + cover) * 0.85
+            # never dip below lead_time * 1.1 (stay above tender trigger)
+            floor = rate_per_day * lead * 1.1
+            new_stock = max(target, floor, r["reorder_threshold"] * 1.2)
+            conn.execute(
+                "UPDATE ingredients SET stock=? WHERE id=?",
+                (round(new_stock, 2), r["id"]),
+            )
+
+
 if __name__ == "__main__":
     summary, trees, prices, _ = run_simulation()
+    normalize_end_stock()
 
     bom_report = dump_bom(trees, prices)
     month_report = monthly_report(summary)

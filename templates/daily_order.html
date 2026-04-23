@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>הזמנה יומית - {{ day.strftime('%A, %d/%m/%Y') }}</h1>
+
+<form method="get" class="inline-form">
+  <label>תאריך
+    <input type="date" name="date" value="{{ day_iso }}" onchange="this.form.submit()">
+  </label>
+</form>
+
+<section>
+  <h2>תכנית שבועית</h2>
+  <table class="week-plan">
+    <thead>
+      <tr>
+        {% for p in plan %}
+          <th class="{% if not p.is_work_day %}closed{% endif %}{% if p.date == day %} today{% endif %}">
+            {{ p.date.strftime('%a') }}<br>{{ p.date.strftime('%d/%m') }}
+          </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        {% for p in plan %}
+          <td class="{% if not p.is_work_day %}closed{% endif %}">
+            {% if not p.is_work_day %}<span class="muted">סגור</span>
+            {% elif p['items'] %}
+              <ul class="mini">
+              {% for it in p['items'] %}<li>{{ it.name }}</li>{% endfor %}
+              </ul>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        {% endfor %}
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>מה להזמין היום ({{ recs|length }} פריטים · ₪{{ "%.2f"|format(total) }})</h2>
+
+  {% if recs %}
+  <table>
+    <thead>
+      <tr>
+        <th>רכיב</th><th>אב מוצר</th><th>מחזור</th>
+        <th>מלאי נוכחי</th><th>שימוש יומי</th><th>פחת %</th>
+        <th>כמות מוצעת</th><th>יחידה</th><th>עלות</th><th>סיבה</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in recs %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td class="parents">{{ r.parent_products }}</td>
+        <td><code>{{ r.order_schedule }}</code></td>
+        <td>{{ "%.1f"|format(r.stock) }}</td>
+        <td>{{ "%.1f"|format(r.rate_per_day) }}</td>
+        <td>{{ "%.1f"|format(r.waste_factor) }}%</td>
+        <td><b>{{ "%.1f"|format(r.suggested_qty) }}</b></td>
+        <td>{{ r.unit }}</td>
+        <td>₪{{ "%.2f"|format(r.estimated_cost) }}</td>
+        <td class="reason">{{ r.reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><th colspan="8">סה"כ עלות הזמנה יומית</th><th>₪{{ "%.2f"|format(total) }}</th><th></th></tr>
+    </tfoot>
+  </table>
+
+  <form method="post" style="margin-top: 1rem;">
+    <input type="hidden" name="action" value="save">
+    <input type="hidden" name="date" value="{{ day_iso }}">
+    <label>הערות <input type="text" name="notes" placeholder="אופציונלי"></label>
+    <button type="submit">שמור הזמנה</button>
+  </form>
+  {% else %}
+    <p class="muted">אין פריטים שדורשים הזמנה היום.</p>
+  {% endif %}
+</section>
+
+{% if history %}
+<section>
+  <h2>היסטוריית הזמנות יומיות</h2>
+  <table>
+    <thead><tr><th>#</th><th>תאריך</th><th>סטטוס</th><th>פריטים</th><th>עלות</th><th></th></tr></thead>
+    <tbody>
+      {% for h in history %}
+      <tr>
+        <td>{{ h['id'] }}</td>
+        <td>{{ h.order_date }}</td>
+        <td><span class="badge {{ h.status }}">{{ h.status }}</span></td>
+        <td>{{ h.item_count }}</td>
+        <td>₪{{ "%.2f"|format(h.total_cost) }}</td>
+        <td>
+          {% if h.status == 'pending' %}
+            <form method="post" action="{{ url_for('daily_order_receive', order_id=h.id) }}" style="display:inline">
+              <button type="submit" class="small">סמן כהתקבל</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

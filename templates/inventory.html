@@ -6,20 +6,23 @@
 <table>
   <thead>
     <tr>
-      <th>רכיב</th><th>קטגוריה</th><th>יחידה</th><th>מחיר/יח'</th>
-      <th>מלאי</th><th>סף הזמנה</th><th>צריכה (30 ימים)</th>
-      <th>שימוש יומי</th><th>ימים שנשארו</th><th>סטטוס</th>
+      <th>רכיב</th><th>אב מוצר</th><th>קטגוריה</th><th>יחידה</th><th>מחיר/יח'</th>
+      <th>פחת %</th><th>מלאי</th><th>סף הזמנה</th><th>מחזור</th>
+      <th>צריכה (30 ימים)</th><th>שימוש יומי</th><th>ימים שנשארו</th><th>סטטוס</th>
     </tr>
   </thead>
   <tbody>
     {% for r in rows %}
     <tr class="{% if r.needs_tender %}warn{% endif %}">
       <td>{{ r.name }}</td>
+      <td class="parents">{{ r.parent_products }}</td>
       <td>{{ r.category }}</td>
       <td>{{ r.unit }}</td>
       <td>₪{{ "%.3f"|format(r.cost_per_unit) }}</td>
+      <td>{{ "%.1f"|format(r.waste_pct or 0) }}%</td>
       <td>{{ "%.1f"|format(r.stock) }}</td>
       <td>{{ "%.1f"|format(r.reorder_threshold) }}</td>
+      <td><code>{{ r.order_schedule }}</code></td>
       <td>{{ "%.1f"|format(r.used_30d) }}</td>
       <td>{{ "%.2f"|format(r.rate_per_day) }}</td>
       <td>{% if r.days_left is not none %}{{ "%.0f"|format(r.days_left) }}{% else %}—{% endif %}</td>

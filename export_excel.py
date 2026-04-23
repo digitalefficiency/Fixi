@@ -24,8 +24,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from datetime import date
 from database import get_conn
-from services import product_tree, inventory_status, tender_candidates
+from services import (
+    product_tree, inventory_status, tender_candidates,
+    parent_products_map, daily_order_for_date, weekly_order_plan,
+)
 
 
 OUT_PATH = Path(__file__).parent / "fixi_export.xlsx"
@@ -166,19 +170,24 @@ def sheet_products(wb):
 def sheet_ingredients(wb):
     ws = wb.create_sheet("רכיבים")
     ws.sheet_view.rightToLeft = True
-    hdr = ["ID", "רכיב", "קטגוריה", "יחידה", "מחיר ליחידה",
-           "מלאי נוכחי", "סף הזמנה", "זמן אספקה (ימים)"]
+    hdr = ["ID", "רכיב", "אב מוצר", "קטגוריה", "יחידה", "מחיר ליחידה",
+           "פחת %", "מלאי נוכחי", "סף הזמנה", "זמן אספקה (ימים)",
+           "כיסוי ימים (יעד)", "מחזור הזמנה"]
     ws.append(hdr)
     _style_header(ws, 1, len(hdr))
+    parents = parent_products_map()
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM ingredients ORDER BY category, name"
         ).fetchall()
     for r in rows:
         ws.append([
-            r["id"], r["name"], r["category"], r["unit"],
-            r["cost_per_unit"], round(r["stock"], 2),
+            r["id"], r["name"],
+            ", ".join(parents.get(r["id"], [])) or "-",
+            r["category"], r["unit"], r["cost_per_unit"],
+            r["waste_pct"], round(r["stock"], 2),
             r["reorder_threshold"], r["tender_lead_time_days"],
+            r["target_cover_days"], r["order_schedule"],
         ])
     _autosize(ws)
 
@@ -369,20 +378,20 @@ def sheet_orders(wb):
 def sheet_reorder(wb):
     ws = wb.create_sheet("פרמטרי הזמנה אוטומטית")
     ws.sheet_view.rightToLeft = True
-    hdr = ["רכיב", "יחידה", "צריכה שנתית", "ממוצע חודשי", "ממוצע יומי",
-           "זמן אספקה (ימים)", "מלאי ביטחון", "Reorder Point",
-           "כמות הזמנה מומלצת", "מחיר/יח'", "עלות הזמנה"]
+    hdr = ["רכיב", "אב מוצר", "יחידה", "פחת %", "צריכה שנתית",
+           "ממוצע חודשי", "ממוצע יומי", "זמן אספקה (ימים)",
+           "כיסוי יעד (ימים)", "מלאי ביטחון", "Reorder Point",
+           "כמות הזמנה (ללא פחת)", "כמות מוצעת (כולל פחת)",
+           "מחיר/יח'", "עלות הזמנה"]
     ws.append(hdr)
     _style_header(ws, 1, len(hdr))
 
+    parents = parent_products_map()
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT i.id, i.name, i.unit, i.cost_per_unit,
-                      i.tender_lead_time_days,
-                      COALESCE((SELECT SUM(c.quantity) FROM consumption_log c
-                                WHERE c.ingredient_id=i.id), 0) AS yearly
-               FROM ingredients i
-               ORDER BY yearly DESC"""
+            """SELECT i.*, COALESCE((SELECT SUM(c.quantity) FROM consumption_log c
+                                     WHERE c.ingredient_id=i.id), 0) AS yearly
+               FROM ingredients i ORDER BY yearly DESC"""
         ).fetchall()
 
     for r in rows:
@@ -390,14 +399,18 @@ def sheet_reorder(wb):
         monthly = yearly / 12
         daily = yearly / 365
         lead = r["tender_lead_time_days"]
+        waste = (r["waste_pct"] or 0) / 100.0
         safety = monthly * 0.30
         reorder_pt = daily * lead + safety
-        order_qty = monthly
+        order_qty_raw = monthly
+        order_qty_waste = order_qty_raw / (1 - waste) if waste < 1 else order_qty_raw
         ws.append([
-            r["name"], r["unit"], round(yearly, 1), round(monthly, 1),
-            round(daily, 2), lead, round(safety, 1), round(reorder_pt, 1),
-            round(order_qty, 1), r["cost_per_unit"],
-            round(order_qty * r["cost_per_unit"], 2),
+            r["name"], ", ".join(parents.get(r["id"], [])) or "-",
+            r["unit"], r["waste_pct"],
+            round(yearly, 1), round(monthly, 1), round(daily, 2),
+            lead, r["target_cover_days"], round(safety, 1), round(reorder_pt, 1),
+            round(order_qty_raw, 1), round(order_qty_waste, 1),
+            r["cost_per_unit"], round(order_qty_waste * r["cost_per_unit"], 2),
         ])
     ws.freeze_panes = "A2"
     _autosize(ws)
@@ -406,7 +419,8 @@ def sheet_reorder(wb):
 def sheet_inventory(wb):
     ws = wb.create_sheet("מלאי ומכרזים")
     ws.sheet_view.rightToLeft = True
-    hdr = ["רכיב", "קטגוריה", "יחידה", "מלאי נוכחי", "סף הזמנה",
+    hdr = ["רכיב", "אב מוצר", "קטגוריה", "יחידה", "פחת %",
+           "מלאי נוכחי", "סף הזמנה", "מחזור הזמנה",
            "שימוש 30 יום", "שימוש יומי", "ימים שנשארו",
            "דרוש מכרז?", "כמות מוצעת למכרז", "עלות מוערכת"]
     ws.append(hdr)
@@ -414,13 +428,15 @@ def sheet_inventory(wb):
 
     rows = inventory_status()
     tender_map = {t["id"]: t for t in tender_candidates()}
+    parents = parent_products_map()
 
     for r in rows:
         t = tender_map.get(r["id"])
         days_left = r["days_left"]
         row_values = [
-            r["name"], r["category"], r["unit"],
-            round(r["stock"], 2), r["reorder_threshold"],
+            r["name"], ", ".join(parents.get(r["id"], [])) or "-",
+            r["category"], r["unit"], r["waste_pct"],
+            round(r["stock"], 2), r["reorder_threshold"], r["order_schedule"],
             round(r["used_30d"], 2), round(r["rate_per_day"], 2),
             round(days_left, 1) if days_left is not None else "-",
             "כן" if r["needs_tender"] else "לא",
@@ -433,6 +449,95 @@ def sheet_inventory(wb):
                 ws.cell(row=ws.max_row, column=c).fill = WARN_FILL
 
     ws.freeze_panes = "A2"
+    _autosize(ws)
+
+
+def sheet_weekly_plan(wb):
+    """Week-at-a-glance: which ingredients are scheduled for each work day + today's qty."""
+    ws = wb.create_sheet("תכנית שבועית")
+    ws.sheet_view.rightToLeft = True
+
+    plan = weekly_order_plan()
+    ws["A1"] = "תכנית הזמנות שבועית (ראשון-חמישי, 5 ימי עבודה)"
+    ws["A1"].font = Font(bold=True, size=14)
+
+    hdr = ["יום", "תאריך", "יום עבודה?", "מספר פריטים",
+           "פריטים (רשימה)", "עלות משוערת"]
+    ws.append([])
+    ws.append(hdr)
+    _style_header(ws, 3, len(hdr))
+
+    heb_days = {"sun":"ראשון","mon":"שני","tue":"שלישי","wed":"רביעי",
+                "thu":"חמישי","fri":"שישי","sat":"שבת"}
+    parents = parent_products_map()
+
+    for day in plan:
+        items = day["items"]
+        if day["is_work_day"]:
+            recs = daily_order_for_date(day["date"])
+            qty_map = {r["id"]: r for r in recs}
+            cost = sum(r["estimated_cost"] for r in recs)
+            item_names = ", ".join(f"{i['name']} ({qty_map[i['id']]['suggested_qty']:.0f} {i['unit']})"
+                                   if i['id'] in qty_map else i['name']
+                                   for i in items)
+        else:
+            cost = 0
+            item_names = "יום סגור"
+
+        row_idx = ws.max_row + 1
+        ws.append([
+            heb_days.get(day["code"], day["code"]),
+            day["date"].isoformat(),
+            "כן" if day["is_work_day"] else "לא",
+            len(items) if day["is_work_day"] else 0,
+            item_names,
+            round(cost, 2),
+        ])
+        if not day["is_work_day"]:
+            for c in range(1, len(hdr) + 1):
+                ws.cell(row=row_idx, column=c).fill = TOTAL_FILL
+
+    _autosize(ws, max_width=80)
+
+
+def sheet_daily_order(wb):
+    """Today's recommended purchase order (detailed)."""
+    ws = wb.create_sheet("הזמנה יומית")
+    ws.sheet_view.rightToLeft = True
+
+    today = date.today()
+    recs = daily_order_for_date(today)
+    parents = parent_products_map()
+
+    ws["A1"] = f"הזמנה יומית מומלצת - {today.isoformat()}"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+
+    hdr = ["רכיב", "אב מוצר", "קטגוריה", "יחידה", "מלאי נוכחי",
+           "שימוש יומי", "פחת %", "מחזור הזמנה", "כיסוי יעד",
+           "כמות מוצעת", "מחיר/יח'", "עלות", "סיבה"]
+    ws.append(hdr)
+    _style_header(ws, 3, len(hdr))
+
+    total = 0.0
+    for r in recs:
+        total += r["estimated_cost"]
+        ws.append([
+            r["name"], ", ".join(parents.get(r["id"], [])) or "-",
+            r["category"], r["unit"], round(r["stock"], 2),
+            round(r["rate_per_day"], 2), r["waste_pct"],
+            r["order_schedule"], r["target_cover_days"],
+            r["suggested_qty"], r["cost_per_unit"],
+            r["estimated_cost"], r["reason"],
+        ])
+
+    row = ws.max_row + 1
+    ws.cell(row=row, column=1, value="סה\"כ").font = TOTAL_FONT
+    ws.cell(row=row, column=12, value=round(total, 2)).font = TOTAL_FONT
+    for c in range(1, len(hdr) + 1):
+        ws.cell(row=row, column=c).fill = TOTAL_FILL
+
+    ws.freeze_panes = "A4"
     _autosize(ws)
 
 
@@ -449,6 +554,8 @@ def build():
     sheet_orders(wb)
     sheet_reorder(wb)
     sheet_inventory(wb)
+    sheet_weekly_plan(wb)
+    sheet_daily_order(wb)
 
     wb.save(OUT_PATH)
     return OUT_PATH
@@ -462,6 +569,6 @@ if __name__ == "__main__":
     for name in [
         "סקירה", "מוצרים", "רכיבים", "עצי מוצר", "מכירות חודשיות",
         "שימוש רכיבים חודשי", "הזמנות", "פרמטרי הזמנה אוטומטית",
-        "מלאי ומכרזים",
+        "מלאי ומכרזים", "תכנית שבועית", "הזמנה יומית",
     ]:
         print(f"  · {name}")

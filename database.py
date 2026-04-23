@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS ingredients (
     cost_per_unit REAL NOT NULL,         -- cost in shekels per unit
     stock REAL NOT NULL DEFAULT 0,       -- current quantity in stock
     reorder_threshold REAL NOT NULL DEFAULT 0,  -- below this => tender candidate
-    tender_lead_time_days INTEGER NOT NULL DEFAULT 14
+    tender_lead_time_days INTEGER NOT NULL DEFAULT 14,
+    waste_pct REAL NOT NULL DEFAULT 0,   -- expected % loss (spoilage/handling/trim)
+    target_cover_days INTEGER NOT NULL DEFAULT 3,  -- desired days of stock on hand
+    order_schedule TEXT NOT NULL DEFAULT 'sun,tue,thu'  -- CSV of weekdays to order
 );
 
 CREATE TABLE IF NOT EXISTS products (
@@ -71,6 +74,29 @@ CREATE TABLE IF NOT EXISTS consumption_log (
     source TEXT NOT NULL,                -- 'recipe' | 'service_extra'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(id),
+    FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)
+);
+
+-- Daily purchase orders to suppliers (distinct from customer 'orders' above).
+CREATE TABLE IF NOT EXISTS daily_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending'|'received'|'cancelled'
+    total_cost REAL NOT NULL DEFAULT 0,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS daily_order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    daily_order_id INTEGER NOT NULL,
+    ingredient_id INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    waste_adjusted_qty REAL NOT NULL,
+    unit_cost REAL NOT NULL,
+    line_cost REAL NOT NULL,
+    reason TEXT,                               -- why suggested (replenish/tender)
+    FOREIGN KEY (daily_order_id) REFERENCES daily_orders(id) ON DELETE CASCADE,
     FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)
 );
 """

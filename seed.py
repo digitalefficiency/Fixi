@@ -10,33 +10,40 @@ Units:
 from database import get_conn, reset_db
 
 
+# Schedule codes:
+#   FRESH_3X = ordered 3 times a week (Sun/Tue/Thu) - perishable produce & meat
+#   FRESH_2X = twice a week (Sun/Wed)              - semi-perishable, sauces, cheese
+#   WEEKLY   = once a week (Sun)                   - dry goods, oil, packaging
+FRESH_3X = "sun,tue,thu"
+FRESH_2X = "sun,wed"
+WEEKLY   = "sun"
+
 INGREDIENTS = [
-    # name,                  category,      unit,   cost/unit, stock,   reorder_threshold, lead_days
+    # name, category, unit, cost/unit, stock, reorder, lead, waste%, cover_days, schedule
     # --- Food ---
-    ("לחמניית המבורגר",       "food",       "unit",  2.50,     200,     80,                 7),
-    ("קציצת בקר 180 גרם",      "food",       "unit",  9.00,     150,     60,                 10),
-    ("גבינה צהובה",           "food",       "gram",  0.08,     8000,    3000,               14),
-    ("חסה",                  "food",       "gram",  0.02,     4000,    1500,               5),
-    ("עגבנייה",              "food",       "gram",  0.015,    5000,    2000,               5),
-    ("בצל",                  "food",       "gram",  0.010,    3000,    1000,               5),
-    ("מלפפון חמוץ",           "food",       "gram",  0.025,    2000,    800,                14),
-    ("רוטב המבורגר",          "food",       "ml",    0.03,     3000,    1000,               14),
+    ("לחמניית המבורגר",       "food",       "unit",  2.50,     200,     80,    7,   2.0,  2, FRESH_3X),
+    ("קציצת בקר 180 גרם",      "food",       "unit",  9.00,     150,     60,    10,  2.5,  3, FRESH_3X),
+    ("גבינה צהובה",           "food",       "gram",  0.08,     8000,    3000,  14,  3.0,  4, FRESH_2X),
+    ("חסה",                  "food",       "gram",  0.02,     4000,    1500,  5,   12.0, 2, FRESH_3X),
+    ("עגבנייה",              "food",       "gram",  0.015,    5000,    2000,  5,   8.0,  2, FRESH_3X),
+    ("בצל",                  "food",       "gram",  0.010,    3000,    1000,  5,   15.0, 3, FRESH_2X),
+    ("מלפפון חמוץ",           "food",       "gram",  0.025,    2000,    800,   14,  3.0,  7, WEEKLY),
+    ("רוטב המבורגר",          "food",       "ml",    0.03,     3000,    1000,  14,  3.0,  7, FRESH_2X),
+    ("חזה עוף פרוס",          "food",       "gram",  0.055,    6000,    2500,  7,   5.0,  2, FRESH_3X),
+    ("פירורי לחם",            "food",       "gram",  0.012,    4000,    1500,  14,  1.5,  14, WEEKLY),
+    ("שמן טיגון",             "food",       "ml",    0.018,    10000,   4000,  14,  8.0,  14, WEEKLY),
+    ("רוטב קיסר",             "food",       "ml",    0.04,     2000,    800,   14,  3.0,  7, FRESH_2X),
+    ("פרמזן מגוררת",          "food",       "gram",  0.12,     1500,    500,   21,  2.5,  14, WEEKLY),
+    ("קרוטונים",              "food",       "gram",  0.03,     1500,    500,   21,  2.0,  14, WEEKLY),
 
-    ("חזה עוף פרוס",          "food",       "gram",  0.055,    6000,    2500,               7),
-    ("פירורי לחם",            "food",       "gram",  0.012,    4000,    1500,               14),
-    ("שמן טיגון",             "food",       "ml",    0.018,    10000,   4000,               14),
-    ("רוטב קיסר",             "food",       "ml",    0.04,     2000,    800,                14),
-    ("פרמזן מגוררת",          "food",       "gram",  0.12,     1500,    500,                21),
-    ("קרוטונים",              "food",       "gram",  0.03,     1500,    500,                21),
-
-    # --- Packaging / disposables (TA) ---
-    ("שקית נייר ניידים",       "packaging",  "unit",  0.70,     500,     200,                14),
-    ("קופסת המבורגר קרטון",     "packaging",  "unit",  1.20,     400,     150,                14),
-    ("קופסת סלט PET",          "packaging",  "unit",  1.50,     300,     120,                14),
-    ("מזלג חד פעמי",           "disposable", "unit",  0.15,     800,     300,                14),
-    ("סכין חד פעמי",           "disposable", "unit",  0.15,     800,     300,                14),
-    ("מפית נייר",              "disposable", "unit",  0.05,     3000,    1000,               14),
-    ("מכסה לקופסת סלט",         "packaging",  "unit",  0.40,     300,     120,                14),
+    # --- Packaging / disposables ---
+    ("שקית נייר ניידים",       "packaging",  "unit",  0.70,     500,     200,   14,  1.0,  14, WEEKLY),
+    ("קופסת המבורגר קרטון",     "packaging",  "unit",  1.20,     400,     150,   14,  1.5,  14, WEEKLY),
+    ("קופסת סלט PET",          "packaging",  "unit",  1.50,     300,     120,   14,  1.5,  14, WEEKLY),
+    ("מזלג חד פעמי",           "disposable", "unit",  0.15,     800,     300,   14,  0.5,  14, WEEKLY),
+    ("סכין חד פעמי",           "disposable", "unit",  0.15,     800,     300,   14,  0.5,  14, WEEKLY),
+    ("מפית נייר",              "disposable", "unit",  0.05,     3000,    1000,  14,  1.0,  14, WEEKLY),
+    ("מכסה לקופסת סלט",         "packaging",  "unit",  0.40,     300,     120,   14,  1.5,  14, WEEKLY),
 ]
 
 
@@ -116,7 +123,9 @@ def seed():
         for row in INGREDIENTS:
             conn.execute(
                 "INSERT INTO ingredients(name,category,unit,cost_per_unit,stock,"
-                "reorder_threshold,tender_lead_time_days) VALUES (?,?,?,?,?,?,?)",
+                "reorder_threshold,tender_lead_time_days,waste_pct,"
+                "target_cover_days,order_schedule) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 row,
             )
         for row in PRODUCTS:
