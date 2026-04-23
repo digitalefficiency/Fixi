@@ -47,8 +47,12 @@ MONTH_MULT = {
     11: 0.95, 12: 0.88,
 }
 
-# weekday Mon=0..Sun=6 (ISO: Mon=0)
-WEEKDAY_MULT = {0: 0.95, 1: 0.95, 2: 1.00, 3: 1.05, 4: 1.35, 5: 1.35, 6: 0.85}
+# Weekly demand pattern requested by the business:
+#   Sun = base, each weekday +20% compounded (Mon..Thu)
+#   Fri: -40% from Thursday
+#   Sat: +100% (double) from Friday  <-- peak day of the week
+# Thursday is the LAST supplier delivery day, so weekend is self-serve from stock.
+from services import WEEKDAY_DEMAND_MULT as WEEKDAY_MULT  # Mon=0..Sun=6
 
 
 def _daily_volume(product: str, d: date, rng: random.Random) -> int:
@@ -59,7 +63,8 @@ def _daily_volume(product: str, d: date, rng: random.Random) -> int:
 
 
 def _ta_ratio(d: date) -> float:
-    return 0.30 if d.weekday() in (4, 5) else 0.45
+    # Weekend = more sit-in (family/friends eating in), less TA
+    return 0.25 if d.weekday() in (4, 5) else 0.45
 
 
 def run_simulation(start: date | None = None):

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>סגירת יום - {{ day.strftime('%A, %d/%m/%Y') }}</h1>
+
+<form method="get" class="inline-form">
+  <label>תאריך
+    <input type="date" name="date" value="{{ day_iso }}" onchange="this.form.submit()">
+  </label>
+</form>
+
+<section>
+  <h2>🤖 הזמנה אוטומטית למחר ({{ preview.tomorrow }})</h2>
+  <p class="muted">
+    המערכת מחשבת: <b>מלאי פתיחה מחר</b> = מלאי עכשיו + קליטות צפויות − תחזית צריכת מחר.<br>
+    מזהה מה צריך להזמין כדי לעמוד בצריכה הבאה. אם מחר חמישי - ההזמנה מכסה גם שישי ושבת.
+  </p>
+  {% if preview.recommendations %}
+  <table>
+    <thead>
+      <tr>
+        <th>רכיב</th><th>מלאי עכשיו</th><th>קליטות צפויות</th>
+        <th>תחזית צריכה מחר</th><th>פתיחה משוערת מחר</th>
+        <th>כמות מוצעת להזמנה</th><th>עלות</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in preview.recommendations %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ "%.1f"|format(r.stock + (preview.forecast_consumption.get(r.id, 0) or 0) - (preview.incoming_today.get(r.id, 0) or 0)) }} {{ r.unit }}</td>
+        <td>{{ "%.1f"|format(preview.incoming_today.get(r.id, 0) or 0) }} {{ r.unit }}</td>
+        <td>{{ "%.1f"|format(preview.forecast_consumption.get(r.id, 0) or 0) }} {{ r.unit }}</td>
+        <td>{{ "%.1f"|format(preview.projected_opening.get(r.id, 0)) }} {{ r.unit }}</td>
+        <td><b>{{ "%.1f"|format(r.suggested_qty) }}</b> {{ r.unit }}</td>
+        <td>₪{{ "%.2f"|format(r.estimated_cost) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><th colspan="6">סה"כ עלות הזמנה אוטומטית</th>
+          <th>₪{{ "%.2f"|format(preview.total_cost) }}</th></tr>
+    </tfoot>
+  </table>
+  <form method="post" style="margin-top: 1rem;">
+    <input type="hidden" name="action" value="auto">
+    <input type="hidden" name="date" value="{{ day_iso }}">
+    <button type="submit">✓ אשר וצור הזמנה אוטומטית ({{ preview.recommendations|length }} פריטים)</button>
+  </form>
+  {% else %}
+    <p class="muted">אין פריטים שצריך להזמין למחר - מלאי צפוי להיות מספיק.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>📊 דוח סגירת היום</h2>
+  <p class="muted">
+    פתיחה + קליטות − צריכה = סגירה. אפשר להזין ספירה פיזית; אם נוצר פער, הוא יירשם כ-variance והמלאי יעודכן.
+  </p>
+  <form method="post">
+    <input type="hidden" name="action" value="count">
+    <input type="hidden" name="date" value="{{ day_iso }}">
+    <table>
+      <thead>
+        <tr>
+          <th>רכיב</th><th>יחידה</th>
+          <th>פתיחה</th><th>צריכה</th><th>קליטות</th><th>סגירה (system)</th>
+          <th>ספירה פיזית</th><th>פער (variance)</th><th>מתחת לסף?</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="{% if r.below_threshold %}warn{% endif %}">
+          <td>{{ r.name }}</td>
+          <td>{{ r.unit }}</td>
+          <td>{{ "%.1f"|format(r.opening) }}</td>
+          <td>{{ "%.1f"|format(r.consumption) }}</td>
+          <td>{{ "%.1f"|format(r.receipts) }}</td>
+          <td><b>{{ "%.1f"|format(r.closing) }}</b></td>
+          <td><input type="number" step="0.1" name="physical_{{ r.ingredient_id }}"
+                     value="{{ '%.1f'|format(r.physical_count) if r.physical_count is not none else '' }}"
+                     placeholder="{{ '%.1f'|format(r.closing) }}"
+                     style="width:100px"></td>
+          <td>
+            {% if r.variance is not none %}
+              <span class="{% if r.variance < 0 %}muted{% endif %}">{{ "%.1f"|format(r.variance) }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>{% if r.below_threshold %}<span class="badge warn">מתחת לסף</span>{% else %}תקין{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin-top: 1rem;">
+      <label>הערות (אופציונלי) <input type="text" name="notes" style="width: 300px;"></label>
+      <button type="submit">💾 שמור ספירת מלאי</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

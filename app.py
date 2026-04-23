@@ -18,6 +18,11 @@ from services import (
     receive_daily_order,
     list_daily_orders,
     supplier_order_from_sales,
+    closing_day_report,
+    record_stock_count,
+    auto_generate_next_day_orders,
+    forecast_tomorrow_consumption,
+    consumption_over_window,
 )
 
 app = Flask(__name__)
@@ -177,6 +182,49 @@ def supplier_order_view():
     return render_template("supplier_order.html", day=d, day_iso=d.isoformat(),
                            result=result, products=products,
                            selected_product=product_id)
+
+
+@app.route("/closing", methods=["GET", "POST"])
+def closing():
+    day_str = request.args.get("date") or request.form.get("date") or date.today().isoformat()
+    try:
+        d = datetime.strptime(day_str, "%Y-%m-%d").date()
+    except ValueError:
+        d = date.today()
+
+    # Handle physical stock count submission
+    if request.method == "POST" and request.form.get("action") == "count":
+        counts = []
+        for key, val in request.form.items():
+            if key.startswith("physical_") and val.strip():
+                iid = int(key.split("_")[1])
+                try:
+                    counts.append({"ingredient_id": iid,
+                                   "physical_qty": float(val),
+                                   "notes": request.form.get("notes") or None})
+                except ValueError:
+                    continue
+        if counts:
+            record_stock_count(d.isoformat(), counts)
+            flash(f"נרשמה ספירת מלאי של {len(counts)} פריטים ליום {d}", "success")
+        return redirect(url_for("closing", date=day_str))
+
+    # Handle auto-generate tomorrow's orders
+    if request.method == "POST" and request.form.get("action") == "auto":
+        summary = auto_generate_next_day_orders(d)
+        if summary["saved"]:
+            flash(f"נוצרה הזמנה אוטומטית למחר #{summary['daily_order_id']} "
+                  f"({len(summary['recommendations'])} פריטים, "
+                  f"₪{summary['total_cost']:.2f})", "success")
+        else:
+            flash("אין פריטים שצריך להזמין למחר", "error")
+        return redirect(url_for("closing", date=day_str))
+
+    rows = closing_day_report(d)
+    # preview tomorrow's auto-order without saving
+    preview = auto_generate_next_day_orders(d, dry_run=True)
+    return render_template("closing.html", day=d, day_iso=d.isoformat(),
+                           rows=rows, preview=preview)
 
 
 @app.route("/settings", methods=["GET", "POST"])

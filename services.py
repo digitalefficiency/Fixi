@@ -213,9 +213,44 @@ def parent_products_map():
     return {iid: sorted(names) for iid, names in mapping.items()}
 
 
-WORK_WEEK = ["sun", "mon", "tue", "wed", "thu"]  # Fri/Sat closed for ordering
+WORK_WEEK = ["sun", "mon", "tue", "wed", "thu"]  # Fri/Sat: no supplier deliveries
 WEEKDAY_TO_CODE = {6: "sun", 0: "mon", 1: "tue", 2: "wed", 3: "thu",
                    4: "fri", 5: "sat"}  # Python weekday(): Mon=0..Sun=6
+
+# Sales demand by weekday, indexed by Python's weekday() (Mon=0..Sun=6).
+# Model: Sun = base, each weekday +20% compounded, Fri -40% from Thu, Sat +100% from Fri.
+WEEKDAY_DEMAND_MULT = {
+    6: 1.000,                               # Sun (base)
+    0: 1.200,                               # Mon = Sun * 1.20
+    1: 1.200 * 1.20,                        # Tue = 1.44
+    2: 1.200 * 1.20 * 1.20,                 # Wed = 1.728
+    3: 1.200 * 1.20 * 1.20 * 1.20,          # Thu = 2.0736  (weekday peak)
+    4: (1.200 * 1.20 * 1.20 * 1.20) * 0.60, # Fri = 1.2442  (-40% from Thu)
+    5: (1.200 * 1.20 * 1.20 * 1.20) * 0.60 * 2.00,  # Sat = 2.4883  (+100% from Fri)
+}
+_WEEKLY_TOTAL_MULT = sum(WEEKDAY_DEMAND_MULT.values())  # ~= 11.174
+
+
+def expected_daily_consumption(rate_per_day, for_date):
+    """Convert a flat average daily rate into expected consumption for a
+    specific calendar date, using the weekday demand multipliers."""
+    mult = WEEKDAY_DEMAND_MULT[for_date.weekday()]
+    return rate_per_day * mult * 7.0 / _WEEKLY_TOTAL_MULT
+
+
+def consumption_over_window(rate_per_day, start_day, num_days):
+    """Sum of expected consumption over `num_days` calendar days starting the
+    day AFTER start_day. Accounts for weekend surge (Sat) and Friday dip."""
+    from datetime import timedelta
+    total = 0.0
+    detail = []
+    for i in range(1, num_days + 1):
+        d = start_day + timedelta(days=i)
+        q = expected_daily_consumption(rate_per_day, d)
+        total += q
+        detail.append({"date": d, "code": WEEKDAY_TO_CODE[d.weekday()],
+                       "expected": q})
+    return total, detail
 
 
 def _weekday_code(d):
@@ -268,7 +303,9 @@ def daily_order_for_date(day):
 
         gap = _days_until_next_order(code, schedule) if scheduled_today else 0
         needed_days = max(cover, lead + gap)
-        target = rate * needed_days
+        # Use weekday-weighted consumption so Thursday orders cover
+        # Sat surge +100% and Fri dip -40%, not a flat average.
+        target, window_detail = consumption_over_window(rate, day, needed_days)
         if waste < 1:
             target = target / (1 - waste)
         shortfall = max(0.0, target - row["stock"])
@@ -296,6 +333,8 @@ def daily_order_for_date(day):
             "reason": " | ".join(reason_parts),
             "day_code": code,
             "is_work_day": is_work_day,
+            "window_detail": window_detail,   # per-day expected consumption
+            "weekend_coverage": code == "thu", # Thu = last-delivery-of-week flag
         })
     recs.sort(key=lambda r: -r["estimated_cost"])
     return recs
@@ -479,6 +518,210 @@ def receive_daily_order(daily_order_id: int):
             (daily_order_id,),
         )
     return True
+
+
+def closing_day_report(day):
+    """Reconstructs what happened on `day`:
+      opening_stock  = current_stock + consumption(day) - receipts(day)
+                       (working backwards from the present state)
+      consumption    = sum(consumption_log for that day)
+      receipts       = sum(daily_order_items where status='received' on that day)
+      closing_stock  = opening - consumption + receipts
+      latest_count   = latest physical count for that ingredient (if any)
+      variance       = latest_count.physical - closing_stock (if exists)
+
+    NOTE: this is an approximation based on walk-back. For a production system
+    you'd snapshot opening stock at midnight. Here we keep it stateless.
+    """
+    with get_conn() as conn:
+        ings = {r["id"]: dict(r) for r in conn.execute(
+            "SELECT * FROM ingredients").fetchall()}
+
+        cons = {r["ingredient_id"]: r["q"] for r in conn.execute(
+            """SELECT ingredient_id, SUM(quantity) AS q
+               FROM consumption_log
+               WHERE DATE(created_at)=DATE(?) GROUP BY ingredient_id""",
+            (str(day),),
+        ).fetchall()}
+
+        recv = {r["ingredient_id"]: r["q"] for r in conn.execute(
+            """SELECT di.ingredient_id, SUM(di.quantity) AS q
+               FROM daily_order_items di
+               JOIN daily_orders d ON d.id=di.daily_order_id
+               WHERE d.status='received' AND DATE(d.order_date)=DATE(?)
+               GROUP BY di.ingredient_id""",
+            (str(day),),
+        ).fetchall()}
+
+        counts = {r["ingredient_id"]: dict(r) for r in conn.execute(
+            """SELECT * FROM stock_counts
+               WHERE DATE(count_date)=DATE(?)
+               ORDER BY created_at DESC""",
+            (str(day),),
+        ).fetchall()}
+
+    # Walk back: current stock -> closing EOD that day -> opening that day.
+    # NOTE: this only works for TODAY. For historical dates the closing is
+    # approximate because stock has moved since.
+    rows = []
+    for iid, ing in ings.items():
+        used = cons.get(iid, 0) or 0
+        received = recv.get(iid, 0) or 0
+        # assume closing = current stock (only true when 'day' is today)
+        closing = ing["stock"]
+        opening = closing + used - received
+        cnt = counts.get(iid)
+        variance = None
+        if cnt:
+            variance = cnt["physical_qty"] - closing
+        rows.append({
+            "ingredient_id": iid,
+            "name": ing["name"],
+            "unit": ing["unit"],
+            "supplier_pack": ing["supplier_pack_label"],
+            "pack_size": ing["pack_size"],
+            "opening": round(opening, 2),
+            "consumption": round(used, 2),
+            "receipts": round(received, 2),
+            "closing": round(closing, 2),
+            "physical_count": cnt["physical_qty"] if cnt else None,
+            "variance": round(variance, 2) if variance is not None else None,
+            "reorder_threshold": ing["reorder_threshold"],
+            "below_threshold": closing < (ing["reorder_threshold"] or 0),
+        })
+    rows.sort(key=lambda r: -r["consumption"])
+    return rows
+
+
+def record_stock_count(day, counts):
+    """counts: list of dicts {ingredient_id, physical_qty, notes?}
+    Adjusts ingredient.stock to match physical count (variance recorded)."""
+    with get_conn() as conn:
+        for c in counts:
+            iid = int(c["ingredient_id"])
+            physical = float(c["physical_qty"])
+            row = conn.execute(
+                "SELECT stock FROM ingredients WHERE id=?", (iid,)
+            ).fetchone()
+            if not row:
+                continue
+            system_qty = row["stock"]
+            variance = physical - system_qty
+            conn.execute(
+                "INSERT INTO stock_counts(count_date,ingredient_id,system_qty,"
+                "physical_qty,variance,notes) VALUES (?,?,?,?,?,?)",
+                (str(day), iid, system_qty, physical, variance, c.get("notes")),
+            )
+            # trust the physical count: adjust stock to match
+            conn.execute(
+                "UPDATE ingredients SET stock=? WHERE id=?", (physical, iid),
+            )
+
+
+def forecast_tomorrow_consumption(for_date):
+    """Estimates tomorrow's consumption per ingredient based on the same
+    weekday's average over the last 4 weeks (falls back to 30-day average)."""
+    target_weekday = for_date.weekday()  # Python: Mon=0..Sun=6
+    with get_conn() as conn:
+        # Use strftime %w (Sun=0..Sat=6); convert python weekday to %w
+        sqlite_dow = (target_weekday + 1) % 7   # Mon(0)->1, Sun(6)->0
+        same_weekday = conn.execute(
+            """SELECT c.ingredient_id,
+                      SUM(c.quantity) AS total,
+                      COUNT(DISTINCT DATE(c.created_at)) AS days
+               FROM consumption_log c
+               WHERE CAST(strftime('%w', c.created_at) AS INT) = ?
+                 AND c.created_at >= DATE(?, '-28 days')
+               GROUP BY c.ingredient_id""",
+            (sqlite_dow, str(for_date)),
+        ).fetchall()
+        fallback = conn.execute(
+            """SELECT ingredient_id, SUM(quantity)/30.0 AS per_day
+               FROM consumption_log
+               WHERE created_at >= DATE(?, '-30 days')
+               GROUP BY ingredient_id""",
+            (str(for_date),),
+        ).fetchall()
+    fb = {r["ingredient_id"]: r["per_day"] for r in fallback}
+    out = {}
+    for r in same_weekday:
+        if r["days"] > 0:
+            out[r["ingredient_id"]] = r["total"] / r["days"]
+    # fill gaps with fallback average
+    for iid, v in fb.items():
+        out.setdefault(iid, v)
+    return out
+
+
+def auto_generate_next_day_orders(today, dry_run=False):
+    """Called at end-of-day (or overnight via cron). Projects what tomorrow's
+    opening stock will be and creates a pending daily_order for anything that
+    would dip below target coverage.
+
+      projected_opening = current_stock + pending_receipts - est_tomorrow_consumption
+                         (where pending_receipts are daily_orders with status
+                          'pending' whose order_date <= tomorrow and are expected
+                          to arrive overnight)
+
+    We then evaluate daily_order_for_date(tomorrow) against projected stock.
+    If dry_run=True, only returns the preview without saving.
+    """
+    from datetime import timedelta
+    tomorrow = today + timedelta(days=1)
+    forecast = forecast_tomorrow_consumption(tomorrow)
+
+    with get_conn() as conn:
+        incoming = {r["ingredient_id"]: r["q"] for r in conn.execute(
+            """SELECT di.ingredient_id, SUM(di.quantity) AS q
+               FROM daily_order_items di
+               JOIN daily_orders d ON d.id=di.daily_order_id
+               WHERE d.status='pending' AND DATE(d.order_date) <= DATE(?)
+               GROUP BY di.ingredient_id""",
+            (str(tomorrow),),
+        ).fetchall()}
+
+        saved_stocks = {}
+        for iid, ing in conn.execute("SELECT id,stock FROM ingredients").fetchall() \
+                or []:
+            pass  # placeholder
+        ingredients = conn.execute("SELECT * FROM ingredients").fetchall()
+        original_stock = {r["id"]: r["stock"] for r in ingredients}
+
+    # temporarily project tomorrow's opening stock to drive the recommendation
+    projected = {}
+    for iid, cur_stock in original_stock.items():
+        proj = cur_stock + (incoming.get(iid, 0) or 0) - (forecast.get(iid, 0) or 0)
+        projected[iid] = max(0.0, proj)
+
+    # apply projected stock (in-memory only when dry_run=True)
+    with get_conn() as conn:
+        for iid, val in projected.items():
+            conn.execute("UPDATE ingredients SET stock=? WHERE id=?", (val, iid))
+
+    try:
+        recs = daily_order_for_date(tomorrow)
+    finally:
+        # always restore original stock
+        with get_conn() as conn:
+            for iid, val in original_stock.items():
+                conn.execute("UPDATE ingredients SET stock=? WHERE id=?", (val, iid))
+
+    summary = {
+        "today": str(today),
+        "tomorrow": str(tomorrow),
+        "projected_opening": projected,
+        "forecast_consumption": forecast,
+        "incoming_today": incoming,
+        "recommendations": recs,
+        "total_cost": round(sum(r["estimated_cost"] for r in recs), 2),
+        "saved": False,
+    }
+    if recs and not dry_run:
+        oid = save_daily_order(str(tomorrow), recs,
+                               notes="auto-generated at end-of-day")
+        summary["daily_order_id"] = oid
+        summary["saved"] = True
+    return summary
 
 
 def list_daily_orders():

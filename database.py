@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS daily_orders (
     notes TEXT
 );
 
+-- Physical stock counts entered by staff. Used to reconcile system vs reality.
+CREATE TABLE IF NOT EXISTS stock_counts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    count_date DATE NOT NULL,
+    ingredient_id INTEGER NOT NULL,
+    system_qty REAL NOT NULL,           -- what the app thought we had
+    physical_qty REAL NOT NULL,         -- what we actually counted
+    variance REAL NOT NULL,             -- physical - system (negative = extra loss)
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)
+);
+
 CREATE TABLE IF NOT EXISTS daily_order_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     daily_order_id INTEGER NOT NULL,

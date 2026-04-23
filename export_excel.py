@@ -29,7 +29,8 @@ from database import get_conn
 from services import (
     product_tree, inventory_status, tender_candidates,
     parent_products_map, daily_order_for_date, weekly_order_plan,
-    supplier_order_from_sales,
+    supplier_order_from_sales, WEEKDAY_DEMAND_MULT, WEEKDAY_TO_CODE,
+    consumption_over_window, closing_day_report,
 )
 
 
@@ -501,6 +502,129 @@ def sheet_weekly_plan(wb):
     _autosize(ws, max_width=80)
 
 
+def sheet_weekly_demand(wb):
+    """Visualizes the weekly demand pattern and the Thursday-covers-weekend
+    arithmetic: for each ingredient, show daily expected consumption Sun-Sat,
+    and how much Thursday's order must cover for the Fri+Sat weekend."""
+    ws = wb.create_sheet("דפוס ביקוש שבועי")
+    ws.sheet_view.rightToLeft = True
+
+    ws["A1"] = "דפוס ביקוש שבועי (Sun=בסיס, יומי +20%, שישי -40%, שבת +100%)"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = "חמישי = יום אספקה אחרון → הזמנת חמישי חייבת לכסות שישי + שבת"
+    ws["A2"].font = Font(size=11, color="B91C1C")
+
+    ws.append([])
+
+    # Show the multipliers themselves
+    heb = {"sun":"ראשון","mon":"שני","tue":"שלישי","wed":"רביעי",
+           "thu":"חמישי","fri":"שישי","sat":"שבת"}
+    weekdays_order = [6, 0, 1, 2, 3, 4, 5]  # Sun..Sat in Python weekday()
+    hdr = ["מכפיל ביקוש"] + [heb[WEEKDAY_TO_CODE[w]] for w in weekdays_order]
+    ws.append(hdr)
+    _style_header(ws, 4, len(hdr))
+    ws.append(["× ביחס לראשון"] +
+              [round(WEEKDAY_DEMAND_MULT[w], 3) for w in weekdays_order])
+
+    ws.append([])
+    # Expected daily consumption per ingredient
+    ws.append(["צריכה יומית צפויה לפי רכיב (מבוססת על ממוצע היסטורי)"])
+    ws.cell(row=ws.max_row, column=1).font = Font(bold=True, size=12)
+
+    hdr = (["רכיב", "יחידה", "צריכה יומית ממוצעת"]
+           + [heb[WEEKDAY_TO_CODE[w]] for w in weekdays_order]
+           + ["סה\"כ שבוע", "צריכת סופ\"ש (ו'+ש')", "חלק מהשבוע"])
+    ws.append(hdr)
+    header_row = ws.max_row
+    _style_header(ws, header_row, len(hdr))
+
+    from datetime import timedelta
+    rows = inventory_status()
+    rows.sort(key=lambda r: -r["rate_per_day"])
+    for r in rows:
+        rate = r["rate_per_day"] or 0
+        # build expected per weekday (normalize so weekly avg = rate)
+        total_mult = sum(WEEKDAY_DEMAND_MULT.values())
+        per_day = {w: rate * WEEKDAY_DEMAND_MULT[w] * 7.0 / total_mult
+                   for w in weekdays_order}
+        weekly = sum(per_day.values())
+        weekend = per_day[4] + per_day[5]   # fri + sat
+        pct = (weekend / weekly * 100) if weekly else 0
+
+        row_vals = [r["name"], r["unit"], round(rate, 2)]
+        row_vals += [round(per_day[w], 1) for w in weekdays_order]
+        row_vals += [round(weekly, 1), round(weekend, 1), f"{pct:.1f}%"]
+        ws.append(row_vals)
+
+    ws.append([])
+    ws.append(["דוגמה: אם היום חמישי וההזמנה הבאה רק ביום ראשון,"])
+    ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+    ws.append(["ההזמנה חייבת לכסות: שישי + שבת + ראשון_בוקר (עד האספקה)"])
+    ws.append([])
+
+    # Thursday-coverage table
+    hdr2 = ["רכיב", "יחידה", "שישי צפוי", "שבת צפוי", "ראשון צפוי",
+            "סה\"כ 3 ימים", "+פחת %", "נדרש כולל פחת"]
+    ws.append(hdr2)
+    hdr2_row = ws.max_row
+    _style_header(ws, hdr2_row, len(hdr2))
+
+    # next weekend starting from last Thursday (for display)
+    today = date.today()
+    # find most recent Thursday on/before today
+    days_back = (today.weekday() - 3) % 7
+    thu = today - timedelta(days=days_back)
+    for r in rows:
+        rate = r["rate_per_day"] or 0
+        waste = (r.get("waste_pct") or 0) / 100.0
+        _, detail = consumption_over_window(rate, thu, 3)  # Fri, Sat, Sun
+        total = sum(x["expected"] for x in detail)
+        with_waste = total / (1 - waste) if waste < 1 else total
+        ws.append([
+            r["name"], r["unit"],
+            round(detail[0]["expected"], 1),
+            round(detail[1]["expected"], 1),
+            round(detail[2]["expected"], 1),
+            round(total, 1),
+            r["waste_pct"],
+            round(with_waste, 1),
+        ])
+
+    _autosize(ws, max_width=30)
+
+
+def sheet_closing_report(wb):
+    """Today's closing: opening/consumption/receipts/closing/below-threshold."""
+    ws = wb.create_sheet("סגירת יום")
+    ws.sheet_view.rightToLeft = True
+
+    ws["A1"] = f"דוח סגירת יום - {date.today().isoformat()}"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+
+    hdr = ["רכיב", "יחידה", "פתיחה", "צריכה", "קליטות",
+           "סגירה (מערכת)", "ספירה פיזית", "פער", "סף הזמנה", "מתחת לסף?"]
+    ws.append(hdr)
+    _style_header(ws, 3, len(hdr))
+
+    for r in closing_day_report(date.today()):
+        row = [
+            r["name"], r["unit"],
+            r["opening"], r["consumption"], r["receipts"], r["closing"],
+            r["physical_count"] if r["physical_count"] is not None else "",
+            r["variance"] if r["variance"] is not None else "",
+            r["reorder_threshold"],
+            "כן" if r["below_threshold"] else "לא",
+        ]
+        ws.append(row)
+        if r["below_threshold"]:
+            for c in range(1, len(hdr) + 1):
+                ws.cell(row=ws.max_row, column=c).fill = WARN_FILL
+
+    ws.freeze_panes = "A4"
+    _autosize(ws)
+
+
 def sheet_supplier_order(wb, sample_date=None, product_id=None, sheet_name=None):
     """For a given date's sales, show the supplier purchase order grouped by supplier.
 
@@ -624,6 +748,8 @@ def build():
     sheet_reorder(wb)
     sheet_inventory(wb)
     sheet_weekly_plan(wb)
+    sheet_weekly_demand(wb)
+    sheet_closing_report(wb)
     sheet_daily_order(wb)
     sheet_supplier_order(wb)
 
@@ -648,7 +774,8 @@ if __name__ == "__main__":
     for name in [
         "סקירה", "מוצרים", "רכיבים", "עצי מוצר", "מכירות חודשיות",
         "שימוש רכיבים חודשי", "הזמנות", "פרמטרי הזמנה אוטומטית",
-        "מלאי ומכרזים", "תכנית שבועית", "הזמנה יומית",
+        "מלאי ומכרזים", "תכנית שבועית", "דפוס ביקוש שבועי",
+        "סגירת יום", "הזמנה יומית",
         "הזמנה לספק (לפי מכירות)", "הזמנה לספק - המבורגר בלבד",
     ]:
         print(f"  · {name}")
