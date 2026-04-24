@@ -269,5 +269,6 @@ if __name__ == "__main__":
     import os
     init_db()
     host = os.environ.get("FIXI_HOST", "0.0.0.0")
-    port = int(os.environ.get("FIXI_PORT", "5000"))
+    # macOS 12+ hijacks port 5000 for AirPlay Receiver, so default to 8000.
+    port = int(os.environ.get("FIXI_PORT", "8000"))
     app.run(host=host, port=port, debug=False)
